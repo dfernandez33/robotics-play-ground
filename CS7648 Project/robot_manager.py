@@ -47,13 +47,7 @@ class RobotManager:
 
         self.ep_robot.robotic_arm.move(arm_x_movement, arm_y_movement).wait_for_completed()
         self.ep_robot.chassis.move(z=chassis_rotation).wait_for_completed()
-        # correct drift due to rotation
-        # chassis_rotation_rad = math.radians(chassis_rotation)
-        # chassis_x = self.chassis_position[0][0]
-        # chassis_y = self.chassis_position[0][1]
-        # x_offset = chassis_x*math.cos(chassis_rotation_rad) + chassis_y*math.sin(chassis_rotation_rad)
-        # y_offset = -math.sin(chassis_rotation_rad)*chassis_x + math.cos(chassis_rotation_rad)*chassis_y
-        # self.ep_robot.chassis.move(x=-x_offset, y=-y_offset).wait_for_completed()
+
         if gripper > 0 and self.gripper_state != GripperState.OPEN:
             self.ep_robot.gripper.open()
             time.sleep(2)
