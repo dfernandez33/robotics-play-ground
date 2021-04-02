@@ -94,6 +94,7 @@ class RobotManager:
             # to use another API key, use `r.recognize_google(audio, key="GOOGLE_SPEECH_RECOGNITION_API_KEY")`
             # instead of `r.recognize_google(audio)`
             return self.speech_recognizer.recognize_google(audio)
+        # TODO: handle exception properly, in case of failure prompt user to provide signal again.
         except sr.UnknownValueError:
             return "Google Speech Recognition could not understand audio"
         except sr.RequestError as e:
