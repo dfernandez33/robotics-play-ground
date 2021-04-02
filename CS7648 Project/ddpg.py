@@ -13,6 +13,8 @@ class DDPG:
         self.critic_network = CriticNetwork(nb_inputs + actor_outputs, hidden_size)
         self.critic_target = CriticNetwork(nb_inputs + actor_outputs, hidden_size)
 
+        self.memory = Memory(max_memory)
+
         # Copy the network parameters onto their respective target networks
         self.__hard_update()
 
@@ -31,7 +33,6 @@ class DDPG:
         self.soft_update_weight = soft_update_weight
         self.discount_factor = discount_factor
         self.criterion = torch.nn.MSELoss()
-        self.memory = Memory(max_memory)
 
     def get_action(self, state: torch.Tensor):
         if self.cuda:
@@ -54,6 +55,7 @@ class DDPG:
                 "critic_network": self.critic_network.state_dict(),
                 "critic_target": self.critic_target.state_dict(),
                 "critic_optimizer": self.critic_optim.state_dict(),
+                "memory": self.memory,
             },
             self.save_path
         )
@@ -110,3 +112,5 @@ class DDPG:
         self.critic_network.load_state_dict(checkpoint["critic_network"])
         self.critic_target.load_state_dict(checkpoint['critic_target'])
         self.critic_optim.load_state_dict(checkpoint["critic_optimizer"])
+        self.memory = checkpoint["memory"]
+        print("Loaded from checkpoint: {}".format(checkpoint_path))
