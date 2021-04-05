@@ -1,4 +1,4 @@
-from models import ActorNetwork, CriticNetwork
+from rl_models import ActorNetwork, CriticNetwork
 import torch
 from replay_buffer import Memory
 
