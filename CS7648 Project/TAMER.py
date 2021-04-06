@@ -19,14 +19,15 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             state = manager.get_state()
             reward_predictions = reward_network(state)
             best_action = int(torch.argmax(reward_predictions).item())
-            creditor[step_counter % 5] = (reward_predictions, best_action, gamma.pdf(6 - (step_counter % 5), 2.0, 0.5, 0.28))
+            creditor[step_counter] = (reward_predictions, best_action, time.time())
 
             if step_counter % 5 == 0:
                 print("Action performed: {}".format(best_action))
                 human_reward = float(input("Please enter reward signal (-5 - 5): "))
+                human_time = time.time()
 
             if human_reward != 0.0:
-                update_weights(human_reward, creditor, loss_criterion, optimizer)
+                update_weights(human_reward, human_time, creditor, loss_criterion, optimizer)
                 human_reward = 0.0
                 creditor = {}
 
@@ -35,8 +36,9 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
     return reward_network
 
 
-def update_weights(reward_signal: float, creditor, loss_criterion, optimizer):
-    for predicted_reward, best_action, credit in creditor.values():
+def update_weights(reward_signal: float, human_time: float, creditor, loss_criterion, optimizer):
+    for predicted_reward, best_action, action_time in creditor.values():
+        credit = gamma.pdf((human_time - action_time), 2.0, 0.0, 0.28)
         target = predicted_reward.clone()
         target[0, best_action] = reward_signal
         step_loss = loss_criterion(credit * predicted_reward, target)
