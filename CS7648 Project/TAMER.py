@@ -18,6 +18,7 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             best_action = int(torch.argmax(reward_predictions).item())
 
             if step_counter % 5 == 0:
+                print("Action performed: {}".format(best_action))
                 human_reward = float(input("Please enter reward signal (-5 - 5): "))
 
             if human_reward != 0.0:
@@ -31,7 +32,7 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
 
 def update_weights(reward_signal: float, predicted_reward: torch.Tensor, best_action: int, loss_criterion, optimizer):
     target = predicted_reward.clone()
-    target[best_action] = reward_signal
+    target[0, best_action] = reward_signal
     step_loss = loss_criterion(predicted_reward, target)
     optimizer.zero_grad()
     step_loss.backward()
