@@ -1,8 +1,10 @@
 from robot_manager import RobotManager
 from robomaster import robot
 from tamer_model import RewardNetwork
+from scipy.stats import gamma
 import numpy as np
 import torch
+import time
 import argparse
 
 
@@ -11,18 +13,20 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
     for epoch in range(epochs):
         step_counter = 0
         human_reward = 0.0
+        creditor = {}
         for step in range(max_length):
             step_counter += 1
             state = manager.get_state()
             reward_predictions = reward_network(state)
             best_action = int(torch.argmax(reward_predictions).item())
+            creditor[step_counter] = (reward_predictions, best_action, gamma.pdf(step_counter, 2.0, 0.5, 0.28))
 
             if step_counter % 5 == 0:
                 print("Action performed: {}".format(best_action))
                 human_reward = float(input("Please enter reward signal (-5 - 5): "))
 
             if human_reward != 0.0:
-                update_weights(human_reward, reward_predictions, best_action, loss_criterion, optimizer)
+                update_weights(human_reward, creditor, loss_criterion, optimizer)
                 human_reward = 0.0
 
             take_action(best_action, manager)
@@ -30,13 +34,14 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
     return reward_network
 
 
-def update_weights(reward_signal: float, predicted_reward: torch.Tensor, best_action: int, loss_criterion, optimizer):
-    target = predicted_reward.clone()
-    target[0, best_action] = reward_signal
-    step_loss = loss_criterion(predicted_reward, target)
-    optimizer.zero_grad()
-    step_loss.backward()
-    optimizer.step()
+def update_weights(reward_signal: float, creditor, loss_criterion, optimizer):
+    for predicted_reward, best_action, credit in creditor.values():
+        target = predicted_reward.clone()
+        target[0, best_action] = reward_signal
+        step_loss = loss_criterion(credit * predicted_reward, target)
+        optimizer.zero_grad()
+        step_loss.backward()
+        optimizer.step()
 
 
 def take_action(action: int, manager: RobotManager):
