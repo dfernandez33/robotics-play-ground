@@ -19,7 +19,7 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             state = manager.get_state()
             reward_predictions = reward_network(state)
             best_action = int(torch.argmax(reward_predictions).item())
-            creditor[step_counter] = (reward_predictions, best_action, gamma.pdf(step_counter, 2.0, 0.5, 0.28))
+            creditor[step_counter % 5] = (reward_predictions, best_action, gamma.pdf(6 - (step_counter % 5), 2.0, 0.5, 0.28))
 
             if step_counter % 5 == 0:
                 print("Action performed: {}".format(best_action))
@@ -28,6 +28,7 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             if human_reward != 0.0:
                 update_weights(human_reward, creditor, loss_criterion, optimizer)
                 human_reward = 0.0
+                creditor = {}
 
             take_action(best_action, manager)
 
