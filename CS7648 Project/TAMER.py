@@ -6,13 +6,20 @@ import numpy as np
 import torch
 import time
 import argparse
+from pynput import keyboard
+from pynput.keyboard import KeyCode
+
+HUMAN_REWARD_SIGNAL = 0.0
 
 
 def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, optimizer, epochs: int,
           max_length: int):
+    global HUMAN_REWARD_SIGNAL
     for epoch in range(epochs):
+        print("Starting new training epoch")
+        manager.reset_arm()
         step_counter = 0
-        human_reward = 0.0
+        HUMAN_REWARD_SIGNAL = 0.0
         creditor = {}
         for step in range(max_length):
             step_counter += 1
@@ -21,14 +28,9 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             best_action = int(torch.argmax(reward_predictions).item())
             creditor[step_counter] = (reward_predictions, best_action, time.time())
 
-            if step_counter % 5 == 0:
-                print("Action performed: {}".format(best_action))
-                human_reward = float(input("Please enter reward signal (-5 - 5): "))
-                human_time = time.time()
-
-            if human_reward != 0.0:
-                update_weights(human_reward, human_time, creditor, loss_criterion, optimizer)
-                human_reward = 0.0
+            if HUMAN_REWARD_SIGNAL != 0.0:
+                update_weights(HUMAN_REWARD_SIGNAL, time.time(), creditor, loss_criterion, optimizer)
+                HUMAN_REWARD_SIGNAL = 0.0
                 creditor = {}
 
             take_action(best_action, manager)
@@ -39,9 +41,10 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
 def update_weights(reward_signal: float, human_time: float, creditor, loss_criterion, optimizer):
     for predicted_reward, best_action, action_time in creditor.values():
         credit = gamma.pdf((human_time - action_time), 2.0, 0.0, 0.28)
-        target = predicted_reward.clone()
+        target = torch.zeros_like(predicted_reward)
         target[0, best_action] = reward_signal
-        step_loss = loss_criterion(credit * predicted_reward, target)
+        credited_predictions = credit * predicted_reward
+        step_loss = loss_criterion(credited_predictions, target)
         optimizer.zero_grad()
         step_loss.backward()
         optimizer.step()
@@ -75,6 +78,32 @@ def take_action(action: int, manager: RobotManager):
         manager.execute_action(action_vector)
 
 
+def reward_input_handler(key):
+    global HUMAN_REWARD_SIGNAL
+    if key == KeyCode(char='1'):
+        HUMAN_REWARD_SIGNAL = -5.0
+    elif key == KeyCode(char='2'):
+        HUMAN_REWARD_SIGNAL = -4.0
+    elif key == KeyCode(char='3'):
+        HUMAN_REWARD_SIGNAL = -3.0
+    elif key == KeyCode(char='4'):
+        HUMAN_REWARD_SIGNAL = -2.0
+    elif key == KeyCode(char='5'):
+        HUMAN_REWARD_SIGNAL = -1.0
+    elif key == KeyCode(char='6'):
+        HUMAN_REWARD_SIGNAL = 0.0
+    elif key == KeyCode(char='7'):
+        HUMAN_REWARD_SIGNAL = 1.0
+    elif key == KeyCode(char='8'):
+        HUMAN_REWARD_SIGNAL = 2.0
+    elif key == KeyCode(char='9'):
+        HUMAN_REWARD_SIGNAL = 3.0
+    elif key == KeyCode(char='0'):
+        HUMAN_REWARD_SIGNAL = 4.0
+    elif key == KeyCode(char='-'):
+        HUMAN_REWARD_SIGNAL = 5.0
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--save-path', help="where to save the model", type=str, required=True)
@@ -97,4 +126,12 @@ if __name__ == '__main__':
     optim = torch.optim.AdamW(lr=args.learning_rate, params=reward_estimator.parameters())
     loss = torch.nn.MSELoss()
 
+    keyboard_listener = keyboard.Listener(
+        on_press=reward_input_handler,
+    )
+    keyboard_listener.start()
+
     learned_reward = train(manager, reward_estimator, loss, optim, args.epochs, args.trajectory_length)
+
+    ep_robot.close()
+    keyboard_listener.stop()
