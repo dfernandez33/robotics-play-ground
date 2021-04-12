@@ -15,21 +15,20 @@ HUMAN_REWARD_SIGNAL = 0.0
 def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, optimizer, epochs: int,
           max_length: int):
     global HUMAN_REWARD_SIGNAL
-    for epoch in range(epochs):
-        print("Starting new training epoch")
+    for _ in range(epochs):
         manager.reset_arm()
         step_counter = 0
         HUMAN_REWARD_SIGNAL = 0.0
         creditor = {}
-        for step in range(max_length):
+        for _ in range(max_length):
             step_counter += 1
             state = manager.get_state()
             reward_predictions = reward_network(state)
             best_action = int(torch.argmax(reward_predictions).item())
-            creditor[step_counter] = (reward_predictions, best_action, time.time())
+            creditor[step_counter] = (state, time.time())
 
             if HUMAN_REWARD_SIGNAL != 0.0:
-                update_weights(HUMAN_REWARD_SIGNAL, time.time(), creditor, loss_criterion, optimizer)
+                update_weights(HUMAN_REWARD_SIGNAL, time.time(), creditor, loss_criterion, optimizer, reward_network)
                 HUMAN_REWARD_SIGNAL = 0.0
                 creditor = {}
 
@@ -38,14 +37,18 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
     return reward_network
 
 
-def update_weights(reward_signal: float, human_time: float, creditor, loss_criterion, optimizer):
-    for predicted_reward, best_action, action_time in creditor.values():
+def update_weights(reward_signal: float, human_time: float, creditor, loss_criterion, optimizer, reward_network):
+    optimizer.zero_grad()
+    for state, action_time in creditor.values():
+        reward_predictions = reward_network(state)
+        best_action = int(torch.argmax(reward_predictions).item())
         credit = gamma.pdf((human_time - action_time), 2.0, 0.0, 0.28)
-        target = torch.zeros_like(predicted_reward)
-        target[0, best_action] = reward_signal
-        credited_predictions = credit * predicted_reward
-        step_loss = loss_criterion(credited_predictions, target)
-        optimizer.zero_grad()
+        target = reward_predictions.clone()
+        curr_reward = target[0, best_action]
+        mask = (target == curr_reward)
+        reward_signal = torch.ones_like(target) * reward_signal
+        target = torch.where(mask, reward_signal, target)
+        step_loss = loss_criterion(credit * reward_predictions, target)
         step_loss.backward()
         optimizer.step()
 
