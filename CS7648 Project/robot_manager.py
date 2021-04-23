@@ -30,6 +30,7 @@ class RobotManager:
         self.speech_recognizer = sr.Recognizer()
 
     def reset_arm(self):
+        self.ep_robot.play_sound(robot.SOUND_ID_RECOGNIZED).wait_for_completed()
         # Choose random starting configuration
         x_pose = random.randrange(78, 122)
         y_pose = random.randrange(57, 110)
@@ -45,6 +46,7 @@ class RobotManager:
         self.gripper_state = GripperState.CLOSED
         self.ep_robot.chassis.move(z=self.chassis_attitude[0][0]).wait_for_completed()  # rotation to starting position
         self.ep_robot.chassis.move(z=rotation).wait_for_completed()  # rotate to random position
+        self.ep_robot.play_sound(robot.SOUND_ID_RECOGNIZED).wait_for_completed()
 
     def execute_action(self, action: np.ndarray):
         arm_x_movement = round(action[0][0], 2)
@@ -82,7 +84,7 @@ class RobotManager:
                               1.0 if self.gripper_state == GripperState.OPEN else 0.0]])
         return state.float()
 
-    def transcribe_audio(self, duration=5):
+    def transcribe_audio(self, duration=3):
         print("Listening for verbal reward signal")
         self.ep_robot.camera.record_audio(save_file="verbal_reward.wav", seconds=duration, sample_rate=16000)
         audio_file = path.join(path.dirname(path.realpath(__file__)), "verbal_reward.wav")
@@ -96,14 +98,14 @@ class RobotManager:
             return self.speech_recognizer.recognize_google(audio)
         # TODO: handle exception properly, in case of failure prompt user to provide signal again.
         except sr.UnknownValueError:
-            return "Google Speech Recognition could not understand audio"
+            return False
         except sr.RequestError as e:
-            return "Could not request results from Google Speech Recognition service; {0}".format(e)
+            return False
 
     def __check_arm_y_movement(self, y_movement):
         valid_y_movement = y_movement
         if y_movement < 0 and self.ee_body_pose[0][1] + y_movement <= self.arm_y_lower_limit:
-            valid_y_movement = -abs(self.ee_body_pose[0][1]  -self.arm_y_lower_limit)
+            valid_y_movement = -abs(self.ee_body_pose[0][1] - self.arm_y_lower_limit)
         return valid_y_movement
 
     def __battery_handler(self, battery_info):
