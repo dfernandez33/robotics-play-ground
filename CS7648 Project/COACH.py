@@ -124,34 +124,6 @@ def train(
     return reward_network, accumulated_rewards
 
 
-def update_weights(
-    reward_signal: float,
-    human_time: float,
-    creditor,
-    loss_criterion,
-    optimizer,
-    reward_network,
-):
-    optimizer.zero_grad()
-    total_loss = torch.zeros((1,))
-    for state, best_action, action_time in creditor.values():
-        reward_predictions = reward_network(state)
-        print(reward_predictions)
-        credit = gamma.pdf((human_time - action_time), 1, 0.0, 0.15)
-        target = reward_predictions.clone()
-        curr_reward = target[0, best_action]
-        mask = target == curr_reward
-        reward_signal = torch.ones_like(target) * reward_signal
-        target = torch.where(mask, reward_signal, torch.zeros_like(reward_signal))
-        print(credit * reward_predictions)
-        print(target * credit)
-        print("--=-=--=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=----")
-        total_loss += loss_criterion(credit * reward_predictions, target * credit)
-    total_loss.backward()
-    optimizer.step()
-    print(f"Loss for this update: {total_loss}")
-
-
 def take_action(action: int, manager: RobotManager):
     action_vector = np.zeros((1, 4))
     end_effector_x, end_effector_y = manager.ee_body_pose[0][:-1]
