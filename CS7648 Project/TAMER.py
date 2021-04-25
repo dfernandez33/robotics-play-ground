@@ -25,10 +25,12 @@ Y_MIN = -28
 
 
 def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, optimizer, starting_epoch: int,
-          epochs: int, max_length: int):
+          epochs: int, max_length: int, window_size: int = 5, minibatch_size: int = 10,):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
     accumulated_rewards = []
+    reward_buffer = []
+    window = []
     for epoch in range(starting_epoch, starting_epoch+epochs+1):
         if epoch % 5 == 0:
             print("Saving checkpoint...")
@@ -46,7 +48,6 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
         print(f"Starting Epoch: {epoch}.")
         step_counter = 0
         HUMAN_REWARD_SIGNAL = 0.0
-        creditor = {}
         curr_accumulated_reward = 0
         while step_counter < max_length:
             if IS_HUMAN_TALKING:
@@ -57,13 +58,22 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
             best_action = int(torch.argmax(reward_predictions).item())
             if random.random() > .95:
                 print('RAND ACTION')
-                best_action = random.randint(0, 7)
-            creditor[step_counter] = (state, best_action, time.time())
+                best_action = random.randint(0, 5)
+            window.append((state, best_action))
     
             if HUMAN_REWARD_SIGNAL != 0.0:
-                update_weights(HUMAN_REWARD_SIGNAL, time.time(), creditor, loss_criterion, optimizer, reward_network)
                 HUMAN_REWARD_SIGNAL = 0.0
-                creditor = {}
+                reward_buffer.append((window[-window_size:], HUMAN_REWARD_SIGNAL, 1/window_size))
+                update_weights([reward_buffer[-1]], loss_criterion, optimizer, reward_network)
+                window = []
+            else:
+                # sample from buffer
+                if len(reward_buffer) > minibatch_size:
+                    window_sample = random.choices(reward_buffer, k=minibatch_size)
+                else:
+                    window_sample = reward_buffer
+                if window_sample:
+                    update_weights(window_sample, loss_criterion, optimizer, reward_network)
 
             curr_accumulated_reward += calculate_reward(TERMINATE, state, np.zeros((1, 4)))
 
@@ -79,25 +89,29 @@ def train(manager: RobotManager, reward_network: RewardNetwork, loss_criterion, 
     return reward_network, accumulated_rewards
 
 
-def update_weights(reward_signal: float, human_time: float, creditor, loss_criterion, optimizer, reward_network):
+def update_weights(window_sample, loss_criterion, optimizer, reward_network, art_states=20):
     optimizer.zero_grad()
-    total_loss = torch.zeros((1, ))
-    for state, best_action, action_time in creditor.values():
-        reward_predictions = reward_network(state)
-        print(reward_predictions)
-        credit = gamma.pdf((human_time - action_time), 1, 0.0, 0.15)
-        target = reward_predictions.clone()
-        curr_reward = target[0, best_action]
-        mask = (target == curr_reward)
-        reward_signal = torch.ones_like(target) * reward_signal
-        target = torch.where(mask, reward_signal, torch.zeros_like(reward_signal))
-        print(credit * reward_predictions)
-        print(target * credit)
-        print('--=-=--=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=----')
-        total_loss += loss_criterion(credit * reward_predictions, target * credit)
+    total_loss = torch.zeros((1,))
+    for sample, human_reward, credit in window_sample:
+        for state, action in sample:
+            for _ in range(art_states):
+                state = generate_artificial_state(state)
+                reward_predictions = reward_network(state)
+                target = reward_predictions.clone()
+                curr_reward = target[action]
+                mask = (target == curr_reward)
+                reward_signal = torch.ones_like(target) * human_reward
+                target = torch.where(mask, reward_signal, torch.zeros_like(reward_signal))
+                total_loss += loss_criterion(reward_predictions, target) * credit
     total_loss.backward()
     optimizer.step()
-    print(f'Loss for this update: {total_loss}')
+
+
+def generate_artificial_state(state, scale=0.01):
+    new_state = []
+    for element in state:
+        new_state.append(np.random.normal(element, np.abs(element)*scale))
+    return torch.tensor(new_state)
 
 
 def take_action(action: int, manager: RobotManager):
@@ -123,19 +137,19 @@ def take_action(action: int, manager: RobotManager):
             action_vector[0][1] = -10.0
             manager.execute_action(action_vector)
         print("Downward EE")
-    elif action == 4:  # ccw base rotation
-        action_vector[0][2] = 15.0
-        manager.execute_action(action_vector)
-        print("CCW Base")
-    elif action == 5:  # cw base rotation
-        action_vector[0][2] = -15.0
-        manager.execute_action(action_vector)
-        print("CW Base")
-    elif action == 6:  # open gripper
+    # elif action == 4:  # ccw base rotation
+    #     action_vector[0][2] = 15.0
+    #     manager.execute_action(action_vector)
+    #     print("CCW Base")
+    # elif action == 5:  # cw base rotation
+    #     action_vector[0][2] = -15.0
+    #     manager.execute_action(action_vector)
+    #     print("CW Base")
+    elif action == 4:  # open gripper
         action_vector[0][3] = 1.0
         manager.execute_action(action_vector)
         print("Open Gripper")
-    elif action == 7:  # close gripper
+    elif action == 5:  # close gripper
         action_vector[0][3] = -1.0
         manager.execute_action(action_vector)
         print("Close Gripper")

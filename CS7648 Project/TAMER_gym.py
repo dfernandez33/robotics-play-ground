@@ -44,10 +44,9 @@ def train(
             env.render()
             reward_predictions = reward_network(state)
             best_action = torch.argmax(reward_predictions)
-            window.append((state, best_action))
             if random.random() > 0.95:
                 best_action = torch.tensor(random.randint(0, 1))
-
+            window.append((state, best_action))
             if HUMAN_REWARD_SIGNAL != 0.0:
                 HUMAN_REWARD_SIGNAL = 0.0
                 reward_buffer.append((window[-window_size:], HUMAN_REWARD_SIGNAL, 1/window_size))
@@ -65,7 +64,7 @@ def train(
             epoch_reward += reward
             state = torch.from_numpy(state.astype(np.float32))
             step_counter += 1
-            time.sleep(0.25)
+            time.sleep(0.05)
 
         print(f'Accumulated_reward over epoch {epoch}: {epoch_reward}')
 
@@ -89,11 +88,13 @@ def update_weights(window_sample, loss_criterion, optimizer, reward_network, art
     total_loss.backward()
     optimizer.step()
 
+
 def generate_artificial_state(state, scale=0.01):
     new_state = []
     for element in state:
         new_state.append(np.random.normal(element, np.abs(element)*scale))
     return torch.tensor(new_state)
+
 
 def reward_input_handler(key):
     global HUMAN_REWARD_SIGNAL
@@ -166,7 +167,7 @@ if __name__ == '__main__':
         optim,
         4,
         100,
-        100,
+        250,
     )
     print("Running Verification")
     verify(reward_estimator, environment)
