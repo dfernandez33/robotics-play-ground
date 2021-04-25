@@ -88,8 +88,7 @@ def train(
                         eligibility_trace_bar += final_human_reward * eligibility_trace
                 print(f"eligibility traceBAR BEFORE: {eligibility_trace_bar}")
                 if len(window_sample) > len(samples_to_remove):
-                    eligibility_trace_bar = (eligibility_trace_bar / (len(window_sample) - len(samples_to_remove))) + \
-                                        beta * -torch.sum(policy_network(state) * torch.log(policy_network(state)), dim=0)
+                    eligibility_trace_bar = (eligibility_trace_bar / (len(window_sample) - len(samples_to_remove)))
                     print(f"eligibility traceBAR AFTER: {eligibility_trace_bar}")
                     eligibility_trace_bar.backward()
                     optimizer.step()
