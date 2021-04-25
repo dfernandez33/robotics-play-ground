@@ -172,17 +172,17 @@ if __name__ == '__main__':
     keyboard_listener.start()
 
     print("Training Agent")
-    # train(
-    #     environment,
-    #     policy_network,
-    #     loss,
-    #     optim,
-    #     0,
-    #     50,
-    #     100,
-    #     16,
-    #     0.35,
-    #     1.5
-    # )
+    train(
+        environment,
+        policy_network,
+        loss,
+        optim,
+        0,
+        50,
+        100,
+        16,
+        0.35,
+        1.5
+    )
     print("Running Verification")
     verify(policy_network, environment)
