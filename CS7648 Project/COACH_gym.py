@@ -1,18 +1,11 @@
-from scipy.stats import gamma
 import numpy as np
 import torch
 import time
-import argparse
 import gym
-from pynput import keyboard, mouse
+from pynput import keyboard
 from pynput.keyboard import KeyCode
-from pynput.mouse import Button
 import random
-from utils import calculate_reward
-import pandas as pd
 from rl_models import PolicyNetwork
-
-from language_model.model import BertTransformerVerbalReward
 
 HUMAN_REWARD_SIGNAL = 0.0
 IS_HUMAN_TALKING = False
