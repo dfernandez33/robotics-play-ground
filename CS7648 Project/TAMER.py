@@ -134,7 +134,6 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
                 TERMINATE, state, np.zeros((1, 4))
             )
             if TERMINATE:
-                print("Resetting state!")
                 print(f"Trial reward:{reward_epoch}")
                 reward_total += reward_epoch
                 break

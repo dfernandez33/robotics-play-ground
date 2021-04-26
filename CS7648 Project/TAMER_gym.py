@@ -5,6 +5,7 @@ import time
 import gym
 from pynput import keyboard
 from pynput.keyboard import KeyCode
+from collections import Counter
 import random
 from rl_models import PolicyNetwork
 from tamer_model import RewardNetwork
@@ -29,6 +30,7 @@ def train(
     global TERMINATE
     reward_buffer = []
     window = []
+    feedback_counter = Counter()
     
     for epoch in range(0, epochs):
         TERMINATE = False
@@ -62,6 +64,7 @@ def train(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
                 )
                 window = []
+                feedback_counter[epoch] += 1
                 HUMAN_REWARD_SIGNAL = 0.0
             else:
                 if len(reward_buffer) > minibatch_size:
@@ -80,6 +83,7 @@ def train(
             time.sleep(1)
 
         print(f"Accumulated_reward over epoch {epoch}: {epoch_reward}")
+        print(f"Feedback over epoch {epoch}: {feedback_counter[epoch]}")
 
     return reward_network
 
@@ -154,7 +158,6 @@ def verify(trained_agent: PolicyNetwork, env: gym.Env):
             state, reward, done, _ = env.step(action.item())
             reward_epoch += reward
             if done:
-                print("Resetting state!")
                 print(f"Trial reward:{reward_epoch}")
                 reward_total += reward_epoch
                 break
