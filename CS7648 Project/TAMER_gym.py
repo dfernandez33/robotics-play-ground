@@ -177,7 +177,7 @@ if __name__ == "__main__":
 
     print("Training Agent")
     train(
-        environment, reward_estimator, loss, optim, 100, 250, nb_actions, 
+        environment, reward_estimator, loss, optim, 20, 100, nb_actions, 
     )
     print("Running Verification")
     verify(reward_estimator, environment)
