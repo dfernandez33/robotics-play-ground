@@ -33,8 +33,8 @@ def train(
     epochs: int,
     max_length: int,
     num_actions: int,
-    window_size: int = 100,
-    minibatch_size: int = 10,
+    window_size: int = 10,
+    minibatch_size: int = 16,
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
@@ -80,7 +80,7 @@ def train(
 
             if HUMAN_REWARD_SIGNAL != 0.0:
                 reward_buffer.append(
-                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / window_size)
+                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / len(window[-window_size:]))
                 )
                 update_weights(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
