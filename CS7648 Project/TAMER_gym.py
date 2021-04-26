@@ -153,7 +153,7 @@ def verify(trained_agent: PolicyNetwork, env: gym.Env):
     for _ in range(10):
         reward_epoch = 0
         state = env.reset()
-        for i in range(100):
+        for _ in range(100):
             action = trained_agent(torch.from_numpy(state).float()).argmax(dim=0)
             state, reward, done, _ = env.step(action.item())
             reward_epoch += reward
