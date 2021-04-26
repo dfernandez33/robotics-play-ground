@@ -25,20 +25,22 @@ def train(
     num_actions: int,
     window_size: int = 10,
     minibatch_size: int = 16,
+    use_hyperball: bool = False,
+    art_states: int = 20,
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
     reward_buffer = []
     window = []
     feedback_counter = Counter()
-    
+
     for epoch in range(0, epochs):
         TERMINATE = False
         print(f"Starting Epoch: {epoch}.")
         step_counter = 0
         HUMAN_REWARD_SIGNAL = 0.0
         epoch_reward = 0
-        
+
         while step_counter < max_length:
             if TERMINATE:
                 print("This epoch has been aborted.")
@@ -58,10 +60,19 @@ def train(
 
             if HUMAN_REWARD_SIGNAL != 0.0:
                 reward_buffer.append(
-                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / len(window[-window_size:]))
+                    (
+                        window[-window_size:],
+                        HUMAN_REWARD_SIGNAL,
+                        1 / len(window[-window_size:]),
+                    )
                 )
                 update_weights(
-                    [reward_buffer[-1]], loss_criterion, optimizer, reward_network
+                    [reward_buffer[-1]],
+                    loss_criterion,
+                    optimizer,
+                    reward_network,
+                    use_hyperball,
+                    art_states,
                 )
                 window = []
                 feedback_counter[epoch] += 1
@@ -89,25 +100,32 @@ def train(
 
 
 def update_weights(
-    window_sample, loss_criterion, optimizer, reward_network, art_states=20
+    window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states,
 ):
     optimizer.zero_grad()
     total_loss = torch.zeros((1,))
     for sample, human_reward, credit in window_sample:
         for state, action in sample:
-            for _ in range(art_states):
-                state = generate_artificial_state(state)
-                reward_predictions = reward_network(state)
-                target = reward_predictions.clone()
-                curr_reward = target[action]
-                mask = target == curr_reward
-                reward_signal = torch.ones_like(target) * human_reward
-                target = torch.where(
-                    mask, reward_signal, torch.zeros_like(reward_signal)
-                )
-                total_loss += loss_criterion(reward_predictions, target) * credit
+            reward_predictions = reward_network(state)
+            target = reward_predictions.clone()
+            curr_reward = target[action]
+            mask = target == curr_reward
+            reward_signal = torch.ones_like(target) * human_reward
+            target = torch.where(mask, reward_signal, torch.zeros_like(reward_signal))
+            total_loss += loss_criterion(reward_predictions, target) * credit
+            if use_hyperball:
+                for _ in range(art_states):
+                    art_state = generate_artificial_state(state)
+                    reward_predictions = reward_network(art_state)
+                    target = reward_predictions.clone()
+                    curr_reward = target[action]
+                    mask = target == curr_reward
+                    reward_signal = torch.ones_like(target) * human_reward
+                    target = torch.where(
+                        mask, reward_signal, torch.zeros_like(reward_signal)
+                    )
+                    total_loss += loss_criterion(reward_predictions, target) * credit
     total_loss.backward()
-    print(total_loss)
     optimizer.step()
 
 

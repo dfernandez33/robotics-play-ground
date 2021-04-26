@@ -43,7 +43,7 @@ def train(
     reward_buffer = []
     window = []
     feedback_counter = Counter()
-    
+
     for epoch in range(starting_epoch, starting_epoch + epochs + 1):
         if epoch % 5 == 0:
             print("Saving checkpoint...")
@@ -55,7 +55,7 @@ def train(
                 },
                 f"TAMER_chkp/chkp-{epoch}.pt",
             )
-        
+
         TERMINATE = False
 
         print("Resetting Robot Arm")
@@ -74,7 +74,7 @@ def train(
             state = manager.get_state()
             reward_predictions = reward_network(state)
             best_action = int(torch.argmax(reward_predictions).item())
-            
+
             if random.random() > 0.95:
                 best_action = random.randint(0, num_actions)
 
@@ -82,7 +82,11 @@ def train(
 
             if HUMAN_REWARD_SIGNAL != 0.0:
                 reward_buffer.append(
-                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / len(window[-window_size:]))
+                    (
+                        window[-window_size:],
+                        HUMAN_REWARD_SIGNAL,
+                        1 / len(window[-window_size:]),
+                    )
                 )
                 update_weights(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
@@ -96,7 +100,7 @@ def train(
                     window_sample = random.choices(reward_buffer, k=minibatch_size)
                 else:
                     window_sample = reward_buffer
-                
+
                 if window_sample:
                     update_weights(
                         window_sample, loss_criterion, optimizer, reward_network
@@ -130,9 +134,7 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
         for _ in range(100):
             action = trained_agent(state).argmax(dim=0)
             take_action(action, manager)
-            reward_epoch += calculate_reward(
-                TERMINATE, state, np.zeros((1, 4))
-            )
+            reward_epoch += calculate_reward(TERMINATE, state, np.zeros((1, 4)))
             if TERMINATE:
                 print(f"Trial reward:{reward_epoch}")
                 reward_total += reward_epoch
@@ -140,7 +142,7 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
         time.sleep(0.2)
     print(f"Average Reward: {reward_total/10}")
 
-    
+
 def update_weights(
     window_sample, loss_criterion, optimizer, reward_network, art_states=20
 ):
