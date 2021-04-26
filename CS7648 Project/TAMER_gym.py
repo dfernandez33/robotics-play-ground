@@ -22,8 +22,8 @@ def train(
     epochs: int,
     max_length: int,
     num_actions: int,
-    window_size: int = 100,
-    minibatch_size: int = 10,
+    window_size: int = 10,
+    minibatch_size: int = 16,
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
@@ -50,13 +50,13 @@ def train(
             best_action = torch.argmax(reward_predictions)
 
             if random.random() > 0.95:
-                best_action = torch.tensor(random.randint(0, 1))
+                best_action = torch.tensor(random.randint(0, num_actions - 1))
 
             window.append((state, best_action))
 
             if HUMAN_REWARD_SIGNAL != 0.0:
                 reward_buffer.append(
-                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / window_size)
+                    (window[-window_size:], HUMAN_REWARD_SIGNAL, 1 / len(window[-window_size:]))
                 )
                 update_weights(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
@@ -77,7 +77,7 @@ def train(
             epoch_reward += reward
             state = torch.from_numpy(state.astype(np.float32))
             step_counter += 1
-            time.sleep(0.05)
+            time.sleep(1)
 
         print(f"Accumulated_reward over epoch {epoch}: {epoch_reward}")
 
@@ -103,6 +103,7 @@ def update_weights(
                 )
                 total_loss += loss_criterion(reward_predictions, target) * credit
     total_loss.backward()
+    print(total_loss)
     optimizer.step()
 
 
@@ -149,7 +150,6 @@ def verify(trained_agent: PolicyNetwork, env: gym.Env):
         reward_epoch = 0
         state = env.reset()
         for i in range(100):
-            env.render()
             action = trained_agent(torch.from_numpy(state).float()).argmax(dim=0)
             state, reward, done, _ = env.step(action.item())
             reward_epoch += reward
@@ -158,7 +158,6 @@ def verify(trained_agent: PolicyNetwork, env: gym.Env):
                 print(f"Trial reward:{reward_epoch}")
                 reward_total += reward_epoch
                 break
-        time.sleep(0.2)
     print(f"Average Reward: {reward_total/10}")
 
 
@@ -166,10 +165,10 @@ if __name__ == "__main__":
     environment = gym.make("CartPole-v0")
     nb_actions = environment.action_space.n
     nb_states = environment.observation_space.shape[0]
-    hidden_state = 128
+    hidden_state = 32
     reward_estimator = RewardNetwork(nb_states, hidden_state, nb_actions)
 
-    optim = torch.optim.AdamW(lr=0.001, params=reward_estimator.parameters())
+    optim = torch.optim.AdamW(lr=0.01, params=reward_estimator.parameters())
     loss = torch.nn.MSELoss()
 
     keyboard_listener = keyboard.Listener(on_press=reward_input_handler,)
@@ -177,7 +176,7 @@ if __name__ == "__main__":
 
     print("Training Agent")
     train(
-        environment, reward_estimator, loss, optim, 20, 100, nb_actions, 
+        environment, reward_estimator, loss, optim, 20, 100, nb_actions,
     )
     print("Running Verification")
     verify(reward_estimator, environment)
