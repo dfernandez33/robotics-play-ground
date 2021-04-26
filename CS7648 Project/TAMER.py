@@ -10,6 +10,7 @@ from pynput import keyboard, mouse
 from pynput.keyboard import KeyCode
 from pynput.mouse import Button
 import random
+from collections import Counter
 from utils import calculate_reward
 import pandas as pd
 
@@ -41,6 +42,7 @@ def train(
     accumulated_rewards = []
     reward_buffer = []
     window = []
+    feedback_counter = Counter()
     
     for epoch in range(starting_epoch, starting_epoch + epochs + 1):
         if epoch % 5 == 0:
@@ -86,6 +88,7 @@ def train(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
                 )
                 window = []
+                feedback_counter[epoch] += 1
                 HUMAN_REWARD_SIGNAL = 0.0
             else:
                 # sample from buffer
@@ -110,11 +113,35 @@ def train(
             take_action(best_action, manager)
 
         print(f"Accumulated_reward over epoch {epoch}: {curr_accumulated_reward}")
+        print(f"Feedback over epoch {epoch}: {feedback_counter[epoch]}")
         accumulated_rewards.append(curr_accumulated_reward)
 
     return reward_network, accumulated_rewards
 
 
+def verify(trained_agent: RewardNetwork, manager: RobotManager):
+    global TERMINATE
+    trained_agent.eval()
+    reward_total = 0
+    for _ in range(10):
+        reward_epoch = 0
+        manager.reset_arm()
+        state = manager.get_state()
+        for _ in range(100):
+            action = trained_agent(state).argmax(dim=0)
+            take_action(action, manager)
+            reward_epoch += calculate_reward(
+                TERMINATE, state, np.zeros((1, 4))
+            )
+            if TERMINATE:
+                print("Resetting state!")
+                print(f"Trial reward:{reward_epoch}")
+                reward_total += reward_epoch
+                break
+        time.sleep(0.2)
+    print(f"Average Reward: {reward_total/10}")
+
+    
 def update_weights(
     window_sample, loss_criterion, optimizer, reward_network, art_states=20
 ):
@@ -139,8 +166,11 @@ def update_weights(
 
 def generate_artificial_state(state, scale=0.01):
     new_state = []
-    for element in state:
-        new_state.append(np.random.normal(element, np.abs(element) * scale))
+    for i, element in enumerate(state):
+        if i < 3:
+            new_state.append(np.random.normal(element, np.abs(element) * scale))
+        else:
+            new_state.append(element)
     return torch.tensor(new_state)
 
 
@@ -167,14 +197,14 @@ def take_action(action: int, manager: RobotManager):
             action_vector[0][1] = -10.0
             manager.execute_action(action_vector)
         print("Downward EE")
-    # elif action == 4:  # ccw base rotation
-    #     action_vector[0][2] = 15.0
-    #     manager.execute_action(action_vector)
-    #     print("CCW Base")
-    # elif action == 5:  # cw base rotation
-    #     action_vector[0][2] = -15.0
-    #     manager.execute_action(action_vector)
-    #     print("CW Base")
+    elif action == 4:  # ccw base rotation
+        action_vector[0][2] = 15.0
+        manager.execute_action(action_vector)
+        print("CCW Base")
+    elif action == 5:  # cw base rotation
+        action_vector[0][2] = -15.0
+        manager.execute_action(action_vector)
+        print("CW Base")
     elif action == 4:  # open gripper
         action_vector[0][3] = 1.0
         manager.execute_action(action_vector)
@@ -201,8 +231,7 @@ def reward_input_handler(key):
         print(HUMAN_REWARD_SIGNAL)
         IS_HUMAN_TALKING = False
     elif key == KeyCode(char="q"):
-        TERMINATE = True
-        HUMAN_REWARD_SIGNAL = -50
+        HUMAN_REWARD_SIGNAL = -10
     elif key == KeyCode(char="w"):
         TERMINATE = True
         HUMAN_REWARD_SIGNAL = 50
@@ -314,6 +343,6 @@ if __name__ == "__main__":
         {"reward_network": learned_reward.state_dict(),}, f"{args.save_model_path}"
     )
     pd.DataFrame(accumulated_rewards).to_csv(args.save_data_path)
-
+    verify(learned_reward, manager)
     ep_robot.close()
     keyboard_listener.stop()
