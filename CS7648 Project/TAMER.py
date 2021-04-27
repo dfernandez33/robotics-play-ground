@@ -39,10 +39,11 @@ def train(
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
-    accumulated_rewards = []
     reward_buffer = []
     window = []
-    feedback_counter = Counter()
+    feedback_counter_positive = Counter()
+    feedback_counter_negative = Counter()
+    reward_counter = Counter()
 
     for epoch in range(starting_epoch, starting_epoch + epochs + 1):
         if epoch % 5 == 0:
@@ -65,6 +66,9 @@ def train(
         step_counter = 0
         HUMAN_REWARD_SIGNAL = 0.0
         curr_accumulated_reward = 0
+        feedback_counter_positive[epoch] = 0
+        feedback_counter_negative[epoch] = 0
+        reward_counter[epoch] = 0
 
         while step_counter < max_length:
             if IS_HUMAN_TALKING:
@@ -92,7 +96,10 @@ def train(
                     [reward_buffer[-1]], loss_criterion, optimizer, reward_network
                 )
                 window = []
-                feedback_counter[epoch] += 1
+                if HUMAN_REWARD_SIGNAL > 0.0:
+                    feedback_counter_positive[epoch] += 1
+                else:
+                    feedback_counter_negative[epoch] += 1
                 HUMAN_REWARD_SIGNAL = 0.0
             else:
                 # sample from buffer
@@ -116,11 +123,14 @@ def train(
 
             take_action(best_action, manager)
 
-        print(f"Accumulated_reward over epoch {epoch}: {curr_accumulated_reward}")
-        print(f"Feedback over epoch {epoch}: {feedback_counter[epoch]}")
-        accumulated_rewards.append(curr_accumulated_reward)
+        reward_counter[epoch] = curr_accumulated_reward
 
-    return reward_network, accumulated_rewards
+    return (
+        reward_network,
+        feedback_counter_positive,
+        feedback_counter_negative,
+        reward_counter,
+    )
 
 
 def verify(trained_agent: RewardNetwork, manager: RobotManager):
@@ -329,7 +339,16 @@ if __name__ == "__main__":
     mouse_listener = mouse.Listener(on_click=mouse_reward_handler)
     mouse_listener.start()
 
-    learned_reward, accumulated_rewards = train(
+    print("Training Agent")
+    total_pd = pd.DataFrame()
+    total_verification_mean = []
+
+    (
+        learned_reward,
+        feedback_counter_positive,
+        feedback_counter_negative,
+        reward_counter,
+    ) = train(
         manager,
         reward_estimator,
         loss,
@@ -340,10 +359,31 @@ if __name__ == "__main__":
         args.num_outputs,
     )
 
-    torch.save(
-        {"reward_network": learned_reward.state_dict(),}, f"{args.save_model_path}"
+    print("Results:")
+    for epoch in feedback_counter_positive:
+        print(
+            f"Positive feedback in epoch {epoch}: {feedback_counter_positive[epoch]} | Negative feedback in epoch {epoch}: {feedback_counter_negative[epoch]} | Reward in epoch {epoch}: {reward_counter[epoch]}"
+        )
+
+    final_pd = pd.merge(
+        pd.DataFrame(feedback_counter_positive.items()),
+        pd.DataFrame(feedback_counter_negative.items()),
+        on=0,
+        how="inner",
     )
-    pd.DataFrame(accumulated_rewards).to_csv(args.save_data_path)
-    verify(learned_reward, manager)
+
+    final_pd = pd.merge(
+        final_pd, pd.DataFrame(reward_counter.items()), on=0, how="inner"
+    )
+
+    final_pd.columns = ["epoch", "positive feedback", "negative feedback", "reward"]
+    final_pd["trial"] = 0
+    total_pd = pd.concat([total_pd, final_pd])
+    print("Running Verification")
+    total_verification_mean.append(verify(reward_estimator, manager))
+    time.sleep(1.0)
+
+    total_pd.to_csv("no_hyperball_experiment.csv")
+    pd.DataFrame(total_verification_mean).to_csv("no_hyperball_verification.csv")
     ep_robot.close()
     keyboard_listener.stop()

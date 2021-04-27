@@ -92,7 +92,12 @@ def train(
                     window_sample = reward_buffer
                 if window_sample:
                     update_weights(
-                        window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states
+                        window_sample,
+                        loss_criterion,
+                        optimizer,
+                        reward_network,
+                        use_hyperball,
+                        art_states,
                     )
 
             state, reward, TERMINATE, _ = env.step(best_action.item())
@@ -103,7 +108,12 @@ def train(
 
         reward_counter[epoch] = epoch_reward
 
-    return reward_network, feedback_counter_positive, feedback_counter_negative, reward_counter
+    return (
+        reward_network,
+        feedback_counter_positive,
+        feedback_counter_negative,
+        reward_counter,
+    )
 
 
 def update_weights(
@@ -131,7 +141,12 @@ def update_weights(
                     target = torch.where(
                         mask, reward_signal, torch.zeros_like(reward_signal)
                     )
-                    total_loss += loss_criterion(reward_predictions, target) * credit * 1/art_states
+                    total_loss += (
+                        loss_criterion(reward_predictions, target)
+                        * credit
+                        * 1
+                        / art_states
+                    )
     total_loss.backward()
     optimizer.step()
 
@@ -152,7 +167,6 @@ def reward_input_handler(key):
         HUMAN_REWARD_SIGNAL = 1.0
 
 
-
 def verify(trained_agent: RewardNetwork, env: gym.Env):
     trained_agent.eval()
     reward_total = 0
@@ -167,7 +181,7 @@ def verify(trained_agent: RewardNetwork, env: gym.Env):
                 reward_total += reward_epoch
                 break
     print(f"Average Reward: {reward_total/500}")
-    return reward_total/500
+    return reward_total / 500
 
 
 if __name__ == "__main__":
@@ -187,33 +201,46 @@ if __name__ == "__main__":
         reward_estimator = RewardNetwork(nb_states, hidden_state, nb_actions)
         optim = torch.optim.AdamW(lr=0.005, params=reward_estimator.parameters())
         print(f"----------------Trial {i} starting--------------")
-        reward_estimator, feedback_counter_positive, feedback_counter_negative, reward_counter = train(
-            environment, reward_estimator, loss, optim, 15, 100, nb_actions, use_hyperball=True, art_states=20,
+        (
+            reward_estimator,
+            feedback_counter_positive,
+            feedback_counter_negative,
+            reward_counter,
+        ) = train(
+            environment,
+            reward_estimator,
+            loss,
+            optim,
+            15,
+            100,
+            nb_actions,
+            use_hyperball=True,
+            art_states=20,
         )
 
         print("Results:")
         for epoch in feedback_counter_positive:
-            print(f'Positive feedback in epoch {epoch}: {feedback_counter_positive[epoch]} | Negative feedback in epoch {epoch}: {feedback_counter_negative[epoch]} | Reward in epoch {epoch}: {reward_counter[epoch]}')
+            print(
+                f"Positive feedback in epoch {epoch}: {feedback_counter_positive[epoch]} | Negative feedback in epoch {epoch}: {feedback_counter_negative[epoch]} | Reward in epoch {epoch}: {reward_counter[epoch]}"
+            )
 
         final_pd = pd.merge(
             pd.DataFrame(feedback_counter_positive.items()),
             pd.DataFrame(feedback_counter_negative.items()),
             on=0,
-            how='inner')
+            how="inner",
+        )
 
         final_pd = pd.merge(
-            final_pd,
-            pd.DataFrame(reward_counter.items()),
-            on=0,
-            how='inner')
+            final_pd, pd.DataFrame(reward_counter.items()), on=0, how="inner"
+        )
 
-
-        final_pd.columns = ['epoch', 'positive feedback', 'negative feedback', 'reward']
-        final_pd['trial'] = i
+        final_pd.columns = ["epoch", "positive feedback", "negative feedback", "reward"]
+        final_pd["trial"] = i
         total_pd = pd.concat([total_pd, final_pd])
         print("Running Verification")
         total_verification_mean.append(verify(reward_estimator, environment))
         time.sleep(1.0)
 
-    total_pd.to_csv('no_hyperball_experiment.csv')
-    pd.DataFrame(total_verification_mean).to_csv('no_hyperball_verification.csv')
+    total_pd.to_csv("no_hyperball_experiment.csv")
+    pd.DataFrame(total_verification_mean).to_csv("no_hyperball_verification.csv")
