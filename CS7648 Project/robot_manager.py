@@ -84,6 +84,23 @@ class RobotManager:
                               1.0 if self.gripper_state == GripperState.OPEN else 0.0]])
         return state.float()
 
+    def set_state(self, state):
+        x_pose, y_pose, rotation, gripper_status = state
+        self.ep_robot.chassis.move(z=rotation).wait_for_completed() 
+        self.ep_robot.robotic_arm.moveto(x_pose, y_pose).wait_for_completed()
+        if gripper_status == GripperState.CLOSED:
+            self.ep_robot.gripper.close()
+            time.sleep(2)
+            self.gripper_state = GripperState.CLOSED
+        elif gripper_status == GripperState.OPEN:
+            self.ep_robot.gripper.open()
+            time.sleep(2)
+            self.gripper_state = GripperState.OPEN
+        else:
+            print('ERROR! Gripper state unk.')
+
+        self.ep_robot.play_sound(robot.SOUND_ID_RECOGNIZED).wait_for_completed()
+
     def transcribe_audio(self, duration=3):
         print("Listening for verbal reward signal")
         self.ep_robot.camera.record_audio(save_file="verbal_reward.wav", seconds=duration, sample_rate=16000)
