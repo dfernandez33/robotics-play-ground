@@ -1,7 +1,6 @@
 from robot_manager import RobotManager
 from robomaster import robot
 from tamer_model import RewardNetwork
-from scipy.stats import gamma
 import numpy as np
 import torch
 import time
@@ -82,7 +81,7 @@ def train(
             best_action = int(torch.argmax(reward_predictions).item())
 
             if random.random() > 0.95:
-                best_action = random.randint(0, num_actions)
+                best_action = random.randint(0, num_actions - 1)
 
             window.append((state, best_action))
 
@@ -117,13 +116,14 @@ def train(
 
             curr_accumulated_reward += calculate_reward(
                 TERMINATE, state, np.zeros((1, 4))
-            )
+            ).item()
 
             if TERMINATE:
                 print("This epoch has been aborted.")
                 break
 
             take_action(best_action, manager)
+            time.sleep(0.5)
 
         reward_counter[epoch] = curr_accumulated_reward
 
@@ -143,8 +143,8 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
         reward_epoch = 0
         manager.reset_arm()
         state = manager.get_state()
-        for _ in range(100):
-            action = trained_agent(state).argmax(dim=0)
+        for _ in range(50):
+            action = int(trained_agent(state).argmax(dim=1).item())
             take_action(action, manager)
             reward_epoch += calculate_reward(TERMINATE, state, np.zeros((1, 4)))
             if TERMINATE:
@@ -153,6 +153,7 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
                 break
         time.sleep(0.2)
     print(f"Average Reward: {reward_total/10}")
+    return reward_total / 10
 
 
 def update_weights(
@@ -164,7 +165,7 @@ def update_weights(
         for state, action in sample:
             reward_predictions = reward_network(state)
             target = reward_predictions.clone()
-            curr_reward = target[action]
+            curr_reward = target[0][action]
             mask = target == curr_reward
             reward_signal = torch.ones_like(target) * human_reward
             target = torch.where(mask, reward_signal, torch.zeros_like(reward_signal))
@@ -174,7 +175,7 @@ def update_weights(
                     art_state = generate_artificial_state(state)
                     reward_predictions = reward_network(art_state)
                     target = reward_predictions.clone()
-                    curr_reward = target[action]
+                    curr_reward = target[0][action]
                     mask = target == curr_reward
                     reward_signal = torch.ones_like(target) * human_reward
                     target = torch.where(
@@ -231,11 +232,11 @@ def take_action(action: int, manager: RobotManager):
         action_vector[0][2] = -15.0
         manager.execute_action(action_vector)
         print("CW Base")
-    elif action == 4:  # open gripper
+    elif action == 6:  # open gripper
         action_vector[0][3] = 1.0
         manager.execute_action(action_vector)
         print("Open Gripper")
-    elif action == 5:  # close gripper
+    elif action == 7:  # close gripper
         action_vector[0][3] = -1.0
         manager.execute_action(action_vector)
         print("Close Gripper")
@@ -329,9 +330,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    ep_robot = robot.Robot()
-    ep_robot.initialize(conn_type="ap", proto_type="udp")
-    manager = RobotManager(ep_robot)
     language_model = None
     reward_estimator = RewardNetwork(
         args.num_inputs, args.hidden_size, args.num_outputs
@@ -358,6 +356,11 @@ if __name__ == "__main__":
     total_pd = pd.DataFrame()
     total_verification_mean = []
 
+    ep_robot = robot.Robot()
+    ep_robot.initialize(conn_type="ap", proto_type="udp")
+    manager = RobotManager(ep_robot)
+    time.sleep(1)
+
     (
         learned_reward,
         feedback_counter_positive,
@@ -372,6 +375,8 @@ if __name__ == "__main__":
         args.epochs,
         args.trajectory_length,
         args.num_outputs,
+        use_hyperball=False,
+        art_states=0
     )
 
     print("Results:")
@@ -398,7 +403,7 @@ if __name__ == "__main__":
     total_verification_mean.append(verify(reward_estimator, manager))
     time.sleep(1.0)
 
-    total_pd.to_csv("no_hyperball_experiment.csv")
-    pd.DataFrame(total_verification_mean).to_csv("no_hyperball_verification.csv")
+    total_pd.to_csv("spike_TAMER_no_hyperball_experiment.csv")
+    pd.DataFrame(total_verification_mean).to_csv("spike_TAMER_no_hyperball_verification.csv")
     ep_robot.close()
     keyboard_listener.stop()

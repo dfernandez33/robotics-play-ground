@@ -1,4 +1,5 @@
-from scipy.stats import gamma
+from scipy.io.wavfile import write
+import sounddevice as sd
 import numpy as np
 import pandas as pd
 import torch
@@ -9,6 +10,10 @@ from pynput.keyboard import KeyCode
 from collections import Counter
 import random
 from tamer_model import RewardNetwork
+from os import path
+import speech_recognition as sr
+from language_model.model import BertTransformerVerbalReward
+
 
 HUMAN_REWARD_SIGNAL = 0.0
 IS_HUMAN_TALKING = False
@@ -50,6 +55,9 @@ def train(
             if TERMINATE:
                 print("This epoch has been aborted.")
                 break
+
+            if IS_HUMAN_TALKING:
+                time.sleep(5)
 
             if step_counter == 0:
                 state = env.reset()
@@ -104,6 +112,7 @@ def train(
             epoch_reward += reward
             state = torch.from_numpy(state.astype(np.float32))
             step_counter += 1
+            print('...............')
             time.sleep(0.15)
 
         reward_counter[epoch] = epoch_reward
@@ -161,10 +170,36 @@ def generate_artificial_state(state, scale=0.01):
 def reward_input_handler(key):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
+    global IS_HUMAN_TALKING
     if key == KeyCode(char="1"):
         HUMAN_REWARD_SIGNAL = -1.0
     elif key == KeyCode(char="9"):
         HUMAN_REWARD_SIGNAL = 1.0
+    elif key == KeyCode(char="s"):
+        IS_HUMAN_TALKING = True
+        command = record_input()
+        print(command)
+        if command:
+            HUMAN_REWARD_SIGNAL = language_model.get_score(command)
+        else:
+            print("Spike could not understand!")
+            HUMAN_REWARD_SIGNAL = 0
+        print(HUMAN_REWARD_SIGNAL)
+        IS_HUMAN_TALKING = False
+
+
+def record_input():
+    with microphone as source:
+        audio = speech_recognizer.listen(source)  # read the entire audio file
+    try:
+        # for testing purposes, we're just using the default API key
+        # to use another API key, use `r.recognize_google(audio, key="GOOGLE_SPEECH_RECOGNITION_API_KEY")`
+        # instead of `r.recognize_google(audio)`
+        return speech_recognizer.recognize_google(audio)
+    except sr.UnknownValueError:
+        return False
+    except sr.RequestError as e:
+        return False
 
 
 def verify(trained_agent: RewardNetwork, env: gym.Env):
@@ -191,16 +226,20 @@ if __name__ == "__main__":
     hidden_state = 32
     loss = torch.nn.MSELoss()
 
+    speech_recognizer = sr.Recognizer()
+    microphone = sr.Microphone(device_index=1)
+    language_model = BertTransformerVerbalReward('LM/bert_textclass.pt').cuda()
     keyboard_listener = keyboard.Listener(on_press=reward_input_handler,)
     keyboard_listener.start()
 
     print("Training Agent")
     total_pd = pd.DataFrame()
     total_verification_mean = []
-    for i in range(5):
+    for i in range(4):
         reward_estimator = RewardNetwork(nb_states, hidden_state, nb_actions)
         optim = torch.optim.AdamW(lr=0.005, params=reward_estimator.parameters())
         print(f"----------------Trial {i} starting--------------")
+        time.sleep(5)
         (
             reward_estimator,
             feedback_counter_positive,
@@ -242,5 +281,5 @@ if __name__ == "__main__":
         total_verification_mean.append(verify(reward_estimator, environment))
         time.sleep(1.0)
 
-    total_pd.to_csv("no_hyperball_experiment.csv")
-    pd.DataFrame(total_verification_mean).to_csv("no_hyperball_verification.csv")
+    total_pd.to_csv("TAMER_HS20_LM_experiment.csv")
+    pd.DataFrame(total_verification_mean).to_csv("TAMER_HS20_LM_verification.csv")
