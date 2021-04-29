@@ -1,18 +1,11 @@
 from robot_manager import RobotManager
 from robomaster import robot
-from tamer_model import RewardNetwork
 import numpy as np
-import torch
 import time
-import argparse
-from pynput import keyboard, mouse
+from pynput import keyboard
 from pynput.keyboard import KeyCode
-from pynput.mouse import Button
-import random
-from collections import Counter
-from utils import calculate_reward
 import pandas as pd
-
+import random
 from language_model.model import BertTransformerVerbalReward
 
 HUMAN_REWARD_SIGNAL = 0.0
@@ -29,26 +22,48 @@ STATE_ACTION_DICT = {}
 def verify(states: list, manager: RobotManager):
     global TERMINATE
     global HUMAN_REWARD_SIGNAL
+    global IS_HUMAN_TALKING
+
+    state_to_dict = {
+        (85, 98, 56, 0) : 0,
+        (94, 105, -133, 0): 1,
+        (95, 86, 177, 0): 2,
+        (79, 100, -73, 0): 3,
+        (81, 72, 155, 0): 4,
+    }
 
     print("------------Starting Training Loop--------------")
+    time.sleep(10)
 
     # sample states with replacement
     state_dict = {}
-    action_loop = [1, 3, 4, 2, 1, 1, 5, 5, 6, 2, 7]
+    action_loop = [1, 3, 4, 2, 0, 1, 0, 5, 6, 2, 7]
     
-    for _ in range(20):
-        curr_state = np.random.choices(states, size=1)
+    for i in range(30):
+        curr_state = random.choice(states)
 
-        print("-------------Resetting Robot-------------")
+        print(f"-------------Resetting Robot {i} / 30-------------")
         manager.set_state(curr_state)
 
-        if curr_state not in state_dict:
-            state_dict[curr_state] = []
-        
+        if state_to_dict[curr_state] not in state_dict:
+            state_dict[state_to_dict[curr_state]] = []
+
+        feedback_per_trajectory = []
         for action in action_loop:
             take_action(action, manager)
-            time.sleep(1)
-            state_dict[curr_state].append(HUMAN_REWARD_SIGNAL)
+            time.sleep(2)
+            command = manager.transcribe_audio()
+            print(command)
+            if command:
+                HUMAN_REWARD_SIGNAL = language_model.get_score(command)
+            else:
+                print("Spike could not understand!")
+                HUMAN_REWARD_SIGNAL = 0
+            feedback_per_trajectory.append(HUMAN_REWARD_SIGNAL)
+            HUMAN_REWARD_SIGNAL = 0.0
+            IS_HUMAN_TALKING = False
+
+        state_dict[state_to_dict[curr_state]].append(feedback_per_trajectory)
     
     return state_dict
 
@@ -146,7 +161,8 @@ def generate_random_states():
 
 
 if __name__ == "__main__":
-    language_model = language_model.BertTransformerVerbalReward('LM/bert_stccalss.pt')
+    language_model = BertTransformerVerbalReward('LM/bert_textclass.pt').cuda()
+
     state_num = 5
 
     keyboard_listener = keyboard.Listener(on_press=reward_input_handler,)
@@ -155,14 +171,24 @@ if __name__ == "__main__":
     print("Training Agent")
 
     ep_robot = robot.Robot()
-    ep_robot.initialize(conn_type="ap", proto_type="udp")
+    ep_robot.initialize(conn_type="rndis", proto_type="udp")
     manager = RobotManager(ep_robot)
-    
+
     random_states = generate_random_states()
     results = verify(random_states, manager)
 
     #TODO: make dataframe and CSV dump for results
 
-    
-    robot.close()
+    final_pd = pd.DataFrame(np.zeros((5, 11)))
+    for state, val in results.items():
+        if len(val) == 0:
+            continue
+        val_np = np.array(val)
+        std = val_np.std(axis=0)
+        for i in range(len(std)):
+            final_pd.iloc[state, i] = std[i]
+
+    final_pd.to_csv('experiments/variance/speech_feedback_subject1.csv')
+
+    ep_robot.close()
     keyboard_listener.stop()
