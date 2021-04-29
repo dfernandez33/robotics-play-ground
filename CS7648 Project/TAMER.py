@@ -12,21 +12,29 @@ import random
 from collections import Counter
 from utils import calculate_reward
 import pandas as pd
+import math
+import speech_recognition as sr
 
 from language_model.model import BertTransformerVerbalReward
 
 HUMAN_REWARD_SIGNAL = 0.0
 IS_HUMAN_TALKING = False
 TERMINATE = False
-X_MAX = 210
-X_MIN = 70
-Y_MAX = 150
-Y_MIN = -28
-
+SOFT_UPDATE_WEIGHT = .01
+# X_MAX = 210
+# X_MIN = 70
+# Y_MAX = 150
+# Y_MIN = -28
+SOFT_UPDATE_WEIGHT = .01
+TRUST_DECAY_START = 0.9
+TRUST_DECAY_END = 0.05
+TRUST_DECAY_RATE = 100
+STEPS_DONE = 0
 
 def train(
     manager: RobotManager,
     reward_network: RewardNetwork,
+    target_reward_network: RewardNetwork,
     loss_criterion,
     optimizer,
     starting_epoch: int,
@@ -40,6 +48,7 @@ def train(
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
+    global STEPS_DONE
     reward_buffer = []
     window = []
     feedback_counter_positive = Counter()
@@ -73,8 +82,8 @@ def train(
 
         while step_counter < max_length:
             if IS_HUMAN_TALKING:
-                time.sleep(7)
-
+                time.sleep(8)
+            STEPS_DONE += 1
             step_counter += 1
             state = manager.get_state()
             reward_predictions = reward_network(state)
@@ -94,7 +103,7 @@ def train(
                     )
                 )
                 update_weights(
-                    [reward_buffer[-1]], loss_criterion, optimizer, reward_network, use_hyperball, art_states
+                    [reward_buffer[-1]], loss_criterion, optimizer, reward_network, use_hyperball, art_states, target_network=target_reward_network
                 )
                 window = []
                 if HUMAN_REWARD_SIGNAL > 0.0:
@@ -111,7 +120,7 @@ def train(
 
                 if window_sample:
                     update_weights(
-                        window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states
+                        window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states, target_network=target_reward_network
                     )
 
             curr_accumulated_reward += calculate_reward(
@@ -134,20 +143,39 @@ def train(
         reward_counter,
     )
 
+def record_input():
+    try:
+        with microphone as source:
+            speech_recognizer.adjust_for_ambient_noise(source)
+            audio = speech_recognizer.listen(source, timeout=1.5, phrase_time_limit=4)  # read the entire audio file
+        # for testing purposes, we're just using the default API key
+        # to use another API key, use `r.recognize_google(audio, key="GOOGLE_SPEECH_RECOGNITION_API_KEY")`
+        # instead of `r.recognize_google(audio)`
+        return speech_recognizer.recognize_google(audio)
+    except sr.UnknownValueError:
+        return False
+    except sr.RequestError as e:
+        return False
+    except sr.WaitTimeoutError as e:
+        return False
 
 def verify(trained_agent: RewardNetwork, manager: RobotManager):
     global TERMINATE
+    global STEPS_DONE
     trained_agent.eval()
     reward_total = 0
     for _ in range(10):
         reward_epoch = 0
         manager.reset_arm()
         state = manager.get_state()
-        for _ in range(50):
+        for i in range(50):
             action = int(trained_agent(state).argmax(dim=1).item())
             take_action(action, manager)
-            reward_epoch += calculate_reward(TERMINATE, state, np.zeros((1, 4)))
-            if TERMINATE:
+            state = manager.get_state()
+            reward_epoch += calculate_reward(
+                TERMINATE, state, np.zeros((1, 4))
+            ).item()
+            if TERMINATE or i >= 49:
                 print(f"Trial reward:{reward_epoch}")
                 reward_total += reward_epoch
                 break
@@ -157,7 +185,7 @@ def verify(trained_agent: RewardNetwork, manager: RobotManager):
 
 
 def update_weights(
-    window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states
+    window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states, target_network=None
 ):
     optimizer.zero_grad()
     total_loss = torch.zeros((1,))
@@ -177,69 +205,68 @@ def update_weights(
                     target = reward_predictions.clone()
                     curr_reward = target[0][action]
                     mask = target == curr_reward
-                    reward_signal = torch.ones_like(target) * human_reward
+                    trust_weight = TRUST_DECAY_END + (TRUST_DECAY_START - TRUST_DECAY_END) \
+                                   * math.exp(-1 * STEPS_DONE / TRUST_DECAY_RATE)
+                    reward_signal = trust_weight * (torch.ones_like(target) * human_reward) \
+                                    + (1 - trust_weight) * target_reward_estimator(state)
                     target = torch.where(
                         mask, reward_signal, torch.zeros_like(reward_signal)
                     )
                     total_loss += (
                         loss_criterion(reward_predictions, target)
                         * credit
-                        * 1
-                        / art_states
                     )
     total_loss.backward()
     optimizer.step()
+    if use_hyperball:
+        target_update(reward_network, target_network)
 
 
-def generate_artificial_state(state, scale=0.01):
+def generate_artificial_state(state, scale=0.1):
     new_state = []
     for i, element in enumerate(state):
         if i < 3:
             new_state.append(np.random.normal(element, np.abs(element) * scale))
         else:
             new_state.append(element)
-    return torch.tensor(new_state)
+
+    return torch.from_numpy(new_state[0].astype(np.float32)).unsqueeze(dim=0)
 
 
 def take_action(action: int, manager: RobotManager):
     action_vector = np.zeros((1, 4))
-    end_effector_x, end_effector_y = manager.ee_body_pose[0][:-1]
     if action == 0:  # forward ee movement
-        if end_effector_x + 10.0 < X_MAX:
-            action_vector[0][0] = 10.0
-            manager.execute_action(action_vector)
         print("Forward EE")
+        action_vector[0][0] = 22.0
+        manager.execute_action(action_vector)
     elif action == 1:  # backward ee movement
-        if end_effector_x - 10.0 > X_MIN:
-            action_vector[0][0] = -10.0
-            manager.execute_action(action_vector)
         print("Backward EE")
+        action_vector[0][0] = -22.0
+        manager.execute_action(action_vector)
     elif action == 2:  # upward ee movement
-        if end_effector_y + 10 < Y_MAX:
-            action_vector[0][1] = 10.0
-            manager.execute_action(action_vector)
         print("Upward EE")
+        action_vector[0][1] = 22.0
+        manager.execute_action(action_vector)
     elif action == 3:  # downward ee movement
-        if end_effector_y - 10 > Y_MIN:
-            action_vector[0][1] = -10.0
-            manager.execute_action(action_vector)
         print("Downward EE")
+        action_vector[0][1] = -22.0
+        manager.execute_action(action_vector)
     elif action == 4:  # ccw base rotation
-        action_vector[0][2] = 15.0
-        manager.execute_action(action_vector)
         print("CCW Base")
-    elif action == 5:  # cw base rotation
-        action_vector[0][2] = -15.0
+        action_vector[0][2] = 22.0
         manager.execute_action(action_vector)
+    elif action == 5:  # cw base rotation
         print("CW Base")
+        action_vector[0][2] = -22.0
+        manager.execute_action(action_vector)
     elif action == 6:  # open gripper
+        print("Open Gripper")
         action_vector[0][3] = 1.0
         manager.execute_action(action_vector)
-        print("Open Gripper")
     elif action == 7:  # close gripper
+        print("Close Gripper")
         action_vector[0][3] = -1.0
         manager.execute_action(action_vector)
-        print("Close Gripper")
 
 
 def reward_input_handler(key):
@@ -248,10 +275,10 @@ def reward_input_handler(key):
     global IS_HUMAN_TALKING
     if key == KeyCode(char="s"):
         IS_HUMAN_TALKING = True
-        command = manager.transcribe_audio()
+        command = record_input()
         print(command)
         if command:
-            HUMAN_REWARD_SIGNAL = language_model.get_score(command)
+            HUMAN_REWARD_SIGNAL = record_input()
         else:
             print("Spike could not understand!")
             HUMAN_REWARD_SIGNAL = 0
@@ -282,12 +309,18 @@ def reward_input_handler(key):
         HUMAN_REWARD_SIGNAL = 2.0
 
 
-def mouse_reward_handler(x, y, button, pressed):
-    global HUMAN_REWARD_SIGNAL
-    if button == Button.left and pressed:
-        HUMAN_REWARD_SIGNAL = 1
-    elif button == Button.right and pressed:
-        HUMAN_REWARD_SIGNAL = -1
+def target_update(local_network, target_network):
+    with torch.no_grad():
+        # Soft update the weights of the actor target network
+        for target_param, param in zip(target_network.parameters(), local_network.parameters()):
+            target_param.copy_(
+                target_param * (1.0 - SOFT_UPDATE_WEIGHT) + param * SOFT_UPDATE_WEIGHT
+            )
+
+
+def hard_update(local_network, target_network):
+    for target_param, param in zip(target_network.parameters(), local_network.parameters()):
+        target_param.data.copy_(param.data)
 
 
 if __name__ == "__main__":
@@ -330,10 +363,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    language_model = None
+    language_model = BertTransformerVerbalReward(args.language_model).cuda() if args.language_model else None
     reward_estimator = RewardNetwork(
         args.num_inputs, args.hidden_size, args.num_outputs
     )
+    target_reward_estimator = RewardNetwork(
+        args.num_inputs, args.hidden_size, args.num_outputs
+    )
+
+    hard_update(reward_estimator, target_reward_estimator)
+
     optim = torch.optim.AdamW(
         lr=args.learning_rate, params=reward_estimator.parameters()
     )
@@ -349,9 +388,6 @@ if __name__ == "__main__":
     keyboard_listener = keyboard.Listener(on_press=reward_input_handler,)
     keyboard_listener.start()
 
-    mouse_listener = mouse.Listener(on_click=mouse_reward_handler)
-    mouse_listener.start()
-
     print("Training Agent")
     total_pd = pd.DataFrame()
     total_verification_mean = []
@@ -359,7 +395,9 @@ if __name__ == "__main__":
     ep_robot = robot.Robot()
     ep_robot.initialize(conn_type="ap", proto_type="udp")
     manager = RobotManager(ep_robot)
-    time.sleep(1)
+    speech_recognizer = sr.Recognizer()
+    microphone = sr.Microphone(device_index=1)
+    time.sleep(2)
 
     (
         learned_reward,
@@ -369,14 +407,15 @@ if __name__ == "__main__":
     ) = train(
         manager,
         reward_estimator,
+        target_reward_estimator,
         loss,
         optim,
         epoch,
         args.epochs,
         args.trajectory_length,
         args.num_outputs,
-        use_hyperball=False,
-        art_states=0
+        use_hyperball=True,
+        art_states=100
     )
 
     print("Results:")
@@ -403,7 +442,7 @@ if __name__ == "__main__":
     total_verification_mean.append(verify(reward_estimator, manager))
     time.sleep(1.0)
 
-    total_pd.to_csv("spike_TAMER_no_hyperball_experiment.csv")
-    pd.DataFrame(total_verification_mean).to_csv("spike_TAMER_no_hyperball_verification.csv")
+    total_pd.to_csv("spike_TAMER_balls_and_whistles_train.csv")
+    pd.DataFrame(total_verification_mean).to_csv("spike_TAMER_balls_and_whistles_val.csv")
     ep_robot.close()
     keyboard_listener.stop()

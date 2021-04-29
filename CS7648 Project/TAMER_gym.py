@@ -1,5 +1,3 @@
-from scipy.io.wavfile import write
-import sounddevice as sd
 import numpy as np
 import pandas as pd
 import torch
@@ -10,19 +8,26 @@ from pynput.keyboard import KeyCode
 from collections import Counter
 import random
 from tamer_model import RewardNetwork
-from os import path
 import speech_recognition as sr
 from language_model.model import BertTransformerVerbalReward
+import math
 
 
 HUMAN_REWARD_SIGNAL = 0.0
 IS_HUMAN_TALKING = False
 TERMINATE = False
+SOFT_UPDATE_WEIGHT = .01
+TRUST_DECAY_START = 0.9
+TRUST_DECAY_END = 0.05
+TRUST_DECAY_RATE = 100
+STEPS_DONE = 0
+device = torch.device("cpu")
 
 
 def train(
     env,
     reward_network: RewardNetwork,
+    target_reward_network: RewardNetwork,
     loss_criterion,
     optimizer,
     epochs: int,
@@ -35,6 +40,8 @@ def train(
 ):
     global HUMAN_REWARD_SIGNAL
     global TERMINATE
+    global STEPS_DONE
+    global device
     reward_buffer = []
     window = []
     feedback_counter_positive = Counter()
@@ -42,6 +49,7 @@ def train(
     reward_counter = Counter()
 
     for epoch in range(0, epochs):
+
         TERMINATE = False
         print(f"Starting Epoch: {epoch}.")
         step_counter = 0
@@ -52,17 +60,22 @@ def train(
         reward_counter[epoch] = 0
 
         while True:
+            if not epoch:
+                time.sleep(0.15)
+            STEPS_DONE += 1
             if TERMINATE:
                 print("This epoch has been aborted.")
                 break
 
             if IS_HUMAN_TALKING:
-                time.sleep(5)
+                time.sleep(5.5)
 
             if step_counter == 0:
                 state = env.reset()
-                state = torch.from_numpy(state.astype(np.float32))
+                state = torch.from_numpy(state.astype(np.float32)).to(device)
             env.render()
+            if len(reward_buffer) == 0:
+                time.sleep(0.15)
             reward_predictions = reward_network(state)
             best_action = torch.argmax(reward_predictions)
 
@@ -86,6 +99,7 @@ def train(
                     reward_network,
                     use_hyperball,
                     art_states,
+                    target_network=target_reward_network
                 )
                 window = []
                 if HUMAN_REWARD_SIGNAL > 0.0:
@@ -106,14 +120,14 @@ def train(
                         reward_network,
                         use_hyperball,
                         art_states,
+                        target_network=target_reward_network
                     )
 
             state, reward, TERMINATE, _ = env.step(best_action.item())
             epoch_reward += reward
-            state = torch.from_numpy(state.astype(np.float32))
+            state = torch.from_numpy(state.astype(np.float32)).to(device)
             step_counter += 1
             print('...............')
-            time.sleep(0.15)
 
         reward_counter[epoch] = epoch_reward
 
@@ -126,12 +140,15 @@ def train(
 
 
 def update_weights(
-    window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states,
+    window_sample, loss_criterion, optimizer, reward_network, use_hyperball, art_states, target_network=None
 ):
+    global STEPS_DONE
+    global device
     optimizer.zero_grad()
-    total_loss = torch.zeros((1,))
+    total_loss = torch.zeros((1,)).to(device)
     for sample, human_reward, credit in window_sample:
         for state, action in sample:
+            state = state.to(device)
             reward_predictions = reward_network(state)
             target = reward_predictions.clone()
             curr_reward = target[action]
@@ -141,29 +158,35 @@ def update_weights(
             total_loss += loss_criterion(reward_predictions, target) * credit
             if use_hyperball:
                 for _ in range(art_states):
-                    art_state = generate_artificial_state(state)
+                    art_state = generate_artificial_state(state).to(device)
                     reward_predictions = reward_network(art_state)
                     target = reward_predictions.clone()
                     curr_reward = target[action]
                     mask = target == curr_reward
-                    reward_signal = torch.ones_like(target) * human_reward
+                    trust_weight = TRUST_DECAY_END + (TRUST_DECAY_START - TRUST_DECAY_END) \
+                                   * math.exp(-1 * STEPS_DONE / TRUST_DECAY_RATE)
+                    reward_signal = trust_weight * (torch.ones_like(target) * human_reward) \
+                                    + (1 - trust_weight) * target_reward_estimator(state)
                     target = torch.where(
                         mask, reward_signal, torch.zeros_like(reward_signal)
                     )
                     total_loss += (
                         loss_criterion(reward_predictions, target)
                         * credit
-                        * 1
-                        / art_states
                     )
     total_loss.backward()
     optimizer.step()
+    if use_hyperball:
+        target_update(reward_network, target_network)
 
 
 def generate_artificial_state(state, scale=0.01):
     new_state = []
     for element in state:
-        new_state.append(np.random.normal(element, np.abs(element) * scale))
+        if torch.cuda.is_available():
+            new_state.append(np.random.normal(element.item(), np.abs(element.item()) * scale))
+        else:
+            new_state.append(np.random.normal(element, np.abs(element) * scale))
     return torch.tensor(new_state)
 
 
@@ -189,9 +212,10 @@ def reward_input_handler(key):
 
 
 def record_input():
-    with microphone as source:
-        audio = speech_recognizer.listen(source)  # read the entire audio file
     try:
+        with microphone as source:
+            speech_recognizer.adjust_for_ambient_noise(source)
+            audio = speech_recognizer.listen(source, timeout=1.5, phrase_time_limit=4)  # read the entire audio file
         # for testing purposes, we're just using the default API key
         # to use another API key, use `r.recognize_google(audio, key="GOOGLE_SPEECH_RECOGNITION_API_KEY")`
         # instead of `r.recognize_google(audio)`
@@ -199,6 +223,8 @@ def record_input():
     except sr.UnknownValueError:
         return False
     except sr.RequestError as e:
+        return False
+    except sr.WaitTimeoutError as e:
         return False
 
 
@@ -219,6 +245,19 @@ def verify(trained_agent: RewardNetwork, env: gym.Env):
     return reward_total / 500
 
 
+def target_update(local_network, target_network):
+    with torch.no_grad():
+        # Soft update the weights of the actor target network
+        for target_param, param in zip(target_network.parameters(), local_network.parameters()):
+            target_param.copy_(
+                target_param * (1.0 - SOFT_UPDATE_WEIGHT) + param * SOFT_UPDATE_WEIGHT
+            )
+
+def hard_update(local_network, target_network):
+    for target_param, param in zip(target_network.parameters(), local_network.parameters()):
+        target_param.data.copy_(param.data)
+
+
 if __name__ == "__main__":
     environment = gym.make("CartPole-v0")
     nb_actions = environment.action_space.n
@@ -236,7 +275,13 @@ if __name__ == "__main__":
     total_pd = pd.DataFrame()
     total_verification_mean = []
     for i in range(4):
-        reward_estimator = RewardNetwork(nb_states, hidden_state, nb_actions)
+        STEPS_DONE = 0
+        reward_estimator = RewardNetwork(nb_states, hidden_state, nb_actions).to(device)
+        target_reward_estimator = RewardNetwork(
+            nb_states, hidden_state, nb_actions
+        ).to(device)
+        hard_update(reward_estimator, target_reward_estimator)
+
         optim = torch.optim.AdamW(lr=0.005, params=reward_estimator.parameters())
         print(f"----------------Trial {i} starting--------------")
         time.sleep(5)
@@ -248,13 +293,14 @@ if __name__ == "__main__":
         ) = train(
             environment,
             reward_estimator,
+            target_reward_estimator,
             loss,
             optim,
             15,
             100,
             nb_actions,
             use_hyperball=True,
-            art_states=20,
+            art_states=10,
         )
 
         print("Results:")
@@ -281,5 +327,6 @@ if __name__ == "__main__":
         total_verification_mean.append(verify(reward_estimator, environment))
         time.sleep(1.0)
 
-    total_pd.to_csv("TAMER_HS20_LM_experiment.csv")
-    pd.DataFrame(total_verification_mean).to_csv("TAMER_HS20_LM_verification.csv")
+    total_pd.to_csv("TAMER_H20_LM_target_net_experiment_extra.csv")
+    pd.DataFrame(total_verification_mean).to_csv(
+        "CS7648 Project/data_might_be_useless/TAMER_HS20_LM_target_net_verification_extra.csv")
